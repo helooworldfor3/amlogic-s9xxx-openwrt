@@ -77,4 +77,6 @@ jobs:
         uses: actions/upload-artifact@v3
         with:
           path: /workdir/openwrt/.config
-          
+
+      - name: Debugging with ssh
+        uses: lhotari/action-upterm@v1
