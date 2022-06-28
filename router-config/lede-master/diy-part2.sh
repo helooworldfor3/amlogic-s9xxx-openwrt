@@ -59,8 +59,5 @@ git clone https://github.com/vernesong/OpenClash.git package/OpenClash
 # luci-app-unblockneteasemusic
 git clone https://github.com/UnblockNeteaseMusic/luci-app-unblockneteasemusic.git package/luci-app-unblockneteasemusic
 
-# luci-app-jd-dailybonus
-git clone https://github.com/jerrykuku/luci-app-jd-dailybonus.git package/luci-app-jd-dailybonus
-
 # ------------------------------- Other ends -------------------------------
 
