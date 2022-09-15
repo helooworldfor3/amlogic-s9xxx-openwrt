@@ -1,8 +1,7 @@
-#========================================================================================================================
+#=====================================================================================
 # https://github.com/ophub/amlogic-s9xxx-openwrt
 # Description: Use Releases file to packaging
-# Cron: min (0 - 59) / hour (0 - 23) / day of month (1 - 31) / month (1 - 12) / day of week (0 - 6)(Sunday - Saturday)
-#========================================================================================================================
+#=====================================================================================
 
 name: Use Releases file to Packaging
 
@@ -11,7 +10,7 @@ on:
   workflow_dispatch:
     inputs:
       branch:
-        description: "Select the packaged source branch"
+        description: "Select the source branch"
         required: false
         default: "lede"
         type: choice
@@ -19,7 +18,7 @@ on:
           - lede
           - official
       openwrt_soc:
-        description: "Select Amlogic SoC"
+        description: "Select device SoC"
         required: false
         default: "all"
         type: choice
@@ -44,16 +43,17 @@ on:
       openwrt_kernel:
         description: "Select kernel version"
         required: false
-        default: "5.10.125_5.15.50"
+        default: "5.10.135_5.15.50"
         type: choice
         options:
-          - 5.4.200_5.10.125
-          - 5.10.125_5.15.50
-          - 5.15.45_5.18.5
-          - 5.4.200
-          - 5.10.125
+          - 5.4.210_5.10.135_5.15.50
+          - 5.4.210_5.10.135
+          - 5.10.135_5.15.50
+          - 5.15.50_5.19.1
+          - 5.4.210
+          - 5.10.135
           - 5.15.50
-          - 5.18.5
+          - 5.19.1
       auto_kernel:
         description: "Auto use the latest kernel"
         required: false
@@ -74,9 +74,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v2
+        uses: actions/checkout@v3
 
       - name: Initialization environment
+        id: init
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
@@ -85,25 +86,21 @@ jobs:
           sudo -E apt-get -qq install $(curl -fsSL https://is.gd/depend_ubuntu2204_openwrt)
           sudo -E apt-get -qq autoremove --purge
           sudo -E apt-get -qq clean
-          sudo timedatectl set-timezone "$TZ"
-          # Input value validation
-          ARR_BRANCH=("official" "lede")
-          if [[ -n "${{ github.event.inputs.branch }}" && -n "$(echo "${ARR_BRANCH[@]}" | grep -w "${{ github.event.inputs.branch }}")" ]]; then
-            RELEASES_BRANCH=${{ github.event.inputs.branch }}
-          else
-            RELEASES_BRANCH=lede
-          fi
-          echo "RELEASES_BRANCH=${RELEASES_BRANCH}" >> $GITHUB_ENV
-          echo "COMPILE_STARTINGTIME=$(date +"%m.%d.%H%M")" >> $GITHUB_ENV
+          sudo timedatectl set-timezone "${TZ}"
+          echo "::set-output name=status::success"
 
       - name: Download OpenWrt Armvirt firmware
         id: down
         if: (!cancelled())
         run: |
+          openwrt_url="$(curl -s "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases" | grep -o "OpenWrt_.*${{ github.event.inputs.branch }}.*/.*rootfs.tar.gz" | head -n 1)"
+          [[ -z "${openwrt_url}" ]] && echo -e "OpenWrt file not found!" && exit 1
+          #
           armvirt_tarfile_path="openwrt/bin/targets/armvirt/64"
-          [ -d "${armvirt_tarfile_path}" ] || mkdir -p ${armvirt_tarfile_path}
-          curl -s "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases" | grep -o "openwrt_s9xxx_${{ env.RELEASES_BRANCH }}.*/.*rootfs.tar.gz" | head -n 1 > DOWNLOAD_ARMVIRT
-          [ -s DOWNLOAD_ARMVIRT ] && wget -q -P ${armvirt_tarfile_path} https://github.com/${GITHUB_REPOSITORY}/releases/download/$(cat DOWNLOAD_ARMVIRT)
+          [[ -d "${armvirt_tarfile_path}" ]] || mkdir -p ${armvirt_tarfile_path}
+          #
+          wget -q -P "${armvirt_tarfile_path}" "https://github.com/${GITHUB_REPOSITORY}/releases/download/${openwrt_url}"
+          [[ "${?}" -ne "0" ]] && echo "The armvirt file download failed!" && exit 1
           echo "::set-output name=status::success"
 
       - name: Build OpenWrt firmware
@@ -120,7 +117,7 @@ jobs:
         uses: ncipollo/release-action@main
         if: env.PACKAGED_STATUS == 'success' && !cancelled()
         with:
-          tag: openwrt_s9xxx_${{ env.RELEASES_BRANCH }}_${{ env.PACKAGED_OUTPUTDATE }}
+          tag: OpenWrt_Aml_${{ github.event.inputs.branch }}_${{ env.PACKAGED_OUTPUTDATE }}
           artifacts: ${{ env.PACKAGED_OUTPUTPATH }}/*
           allowUpdates: true
           token: ${{ secrets.GH_TOKEN }}

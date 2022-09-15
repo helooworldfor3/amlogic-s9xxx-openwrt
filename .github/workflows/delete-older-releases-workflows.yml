@@ -1,7 +1,7 @@
-#==========================================================================
+#=====================================================================================
 # https://github.com/ophub/amlogic-s9xxx-armbian
 # Description: Automatically delete older releases and workflows
-#==========================================================================
+#=====================================================================================
 
 name: Delete older releases and workflows
 
@@ -22,7 +22,7 @@ on:
       keep_latest:
         description: "Choose how many Releases to keep."
         required: false
-        default: "3"
+        default: "4"
         type: choice
         options:
           - 30
@@ -85,8 +85,6 @@ on:
           - 2
           - 1
           - 0
-  #schedule:
-  #- cron: "0 23 * * 0"
 
 env:
   TZ: America/New_York
@@ -98,14 +96,15 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@main
+        uses: actions/checkout@v3
 
       - name: Initialization environment
+        id: init
         env:
           DEBIAN_FRONTEND: noninteractive
         run: |
           sudo timedatectl set-timezone "${TZ}"
-          echo "DELETE_STARTINGTIME=$(date +"%m.%d.%H%M")" >> $GITHUB_ENV
+          echo "::set-output name=status::success"
 
       - name: Delete older releases
         uses: dev-drprasad/delete-older-releases@master

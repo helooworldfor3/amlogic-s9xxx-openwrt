@@ -12,18 +12,22 @@
 # Copyright (C) 2021- https://github.com/unifreq/openwrt_packit
 # Copyright (C) 2021- https://github.com/ophub/amlogic-s9xxx-openwrt
 #
-# Instructions: https://openwrt.org/docs/guide-user/additional-software/imagebuilder
-# Download options: https://downloads.openwrt.org/releases
-# Command: ./imagebuilder.sh <branch>
-#          ./imagebuilder.sh 21.02.3
+# Download from: https://downloads.openwrt.org/releases
+# Documentation: https://openwrt.org/docs/guide-user/additional-software/imagebuilder
+# Instructions:  Download OpenWrt firmware from the official OpenWrt,
+#                Use Image Builder to add packages, lib, theme, app and i18n, etc.
+#
+# Command: ./router-config/openwrt-imagebuilder/imagebuilder.sh <branch>
+#          ./router-config/openwrt-imagebuilder/imagebuilder.sh 21.02.3
 #
 #======================================== Functions list ========================================
 #
 # error_msg               : Output error message
 # download_imagebuilder   : Downloading OpenWrt ImageBuilder
-# custom_packages         : Add custom packages
-# custom_files            : Add custom files
 # adjust_settings         : Adjust related file settings
+# custom_packages         : Add custom packages
+# custom_config           : Add custom config
+# custom_files            : Add custom files
 # rebuild_firmware        : rebuild_firmware
 #
 #================================ Set make environment variables ================================
@@ -32,6 +36,7 @@
 make_path="${PWD}"
 imagebuilder_path="${make_path}/openwrt"
 custom_files_path="${make_path}/router-config/openwrt-imagebuilder/files"
+config_file_path="${make_path}/router-config/openwrt-imagebuilder/.config"
 # Set default parameters
 STEPS="[\033[95m STEPS \033[0m]"
 INFO="[\033[94m INFO \033[0m]"
@@ -64,6 +69,28 @@ download_imagebuilder() {
     echo -e "${INFO} [ ${make_path} ] directory status: $(ls . -l 2>/dev/null)"
 }
 
+# Adjust related files in the ImageBuilder directory
+adjust_settings() {
+    cd ${imagebuilder_path}
+
+    # For .config file
+    [[ -s ".config" ]] && {
+        echo -e "${STEPS} Start adjusting .config file settings..."
+        # Root filesystem archives
+        sed -i "s|CONFIG_TARGET_ROOTFS_CPIOGZ=.*|# CONFIG_TARGET_ROOTFS_CPIOGZ is not set|g" .config
+        # Root filesystem images
+        sed -i "s|CONFIG_TARGET_ROOTFS_EXT4FS=.*|# CONFIG_TARGET_ROOTFS_EXT4FS is not set|g" .config
+        sed -i "s|CONFIG_TARGET_ROOTFS_SQUASHFS=.*|# CONFIG_TARGET_ROOTFS_SQUASHFS is not set|g" .config
+        sed -i "s|CONFIG_TARGET_IMAGES_GZIP=.*|# CONFIG_TARGET_IMAGES_GZIP is not set|g" .config
+    }
+
+    # For other files
+    # ......
+
+    sync && sleep 3
+    echo -e "${INFO} [ openwrt ] directory status: $(ls -al 2>/dev/null)"
+}
+
 # Add custom packages
 # If there is a custom package or ipk you would prefer to use create a [ packages ] directory,
 # If one does not exist and place your custom ipk within this directory.
@@ -94,6 +121,18 @@ custom_packages() {
     echo -e "${INFO} [ packages ] directory status: $(ls packages -l 2>/dev/null)"
 }
 
+# Add custom packages, lib, theme, app and i18n, etc.
+custom_config() {
+    echo -e "${STEPS} Start adding custom config..."
+
+    config_list=""
+    [[ -s "${config_file_path}" ]] && {
+        config_list="$(cat ${config_file_path} 2>/dev/null | grep -E "^CONFIG_PACKAGE_.*=y" | sed -e 's/CONFIG_PACKAGE_//g' -e 's/=y//g' -e 's/[ ][ ]*//g' | tr '\n' ' ')"
+    }
+
+    echo -e "${INFO} Custom config list: \n$(echo "${config_list}" | tr ' ' '\n')"
+}
+
 # Add custom files
 # The FILES variable allows custom configuration files to be included in images built with Image Builder.
 # The [ files ] directory should be placed in the Image Builder root directory where you issue the make command.
@@ -111,61 +150,37 @@ custom_files() {
     }
 }
 
-# Adjust related files in the ImageBuilder directory
-adjust_settings() {
-    cd ${imagebuilder_path}
-
-    # For .config file
-    [[ -s ".config" ]] && {
-        echo -e "${STEPS} Start adjusting .config file settings..."
-        # Root filesystem archives
-        sed -i "s|CONFIG_TARGET_ROOTFS_CPIOGZ=.*|# CONFIG_TARGET_ROOTFS_CPIOGZ is not set|g" .config
-        # Root filesystem images
-        sed -i "s|CONFIG_TARGET_ROOTFS_EXT4FS=.*|# CONFIG_TARGET_ROOTFS_EXT4FS is not set|g" .config
-        sed -i "s|CONFIG_TARGET_ROOTFS_SQUASHFS=.*|# CONFIG_TARGET_ROOTFS_SQUASHFS is not set|g" .config
-        sed -i "s|CONFIG_TARGET_IMAGES_GZIP=.*|# CONFIG_TARGET_IMAGES_GZIP is not set|g" .config
-    }
-
-    # For other files
-    # ......
-
-    sync && sleep 3
-    echo -e "${INFO} [ openwrt ] directory status: $(ls -al 2>/dev/null)"
-}
-
 # Rebuild OpenWrt firmware
 rebuild_firmware() {
     cd ${imagebuilder_path}
 
     echo -e "${STEPS} Start building OpenWrt with Image Builder..."
-    # Selecting packages, lib, theme, app and i18n
+    # Selecting default packages, lib, theme, app and i18n, etc.
+    # sorting by https://build.moz.one
     my_packages="\
-        bash perl-http-date perlbase-getopt perlbase-time perlbase-unicode perlbase-utf8 blkid fdisk \
-        lsblk parted attr btrfs-progs chattr dosfstools e2fsprogs f2fs-tools f2fsck lsattr mkf2fs \
-        xfs-fsck xfs-mkfs bash gawk getopt losetup pv uuidgen coremark coreutils uclient-fetch wwan \
-        coreutils-base64 coreutils-nohup kmod-brcmfmac kmod-brcmutil kmod-cfg80211 kmod-mac80211 \
-        hostapd-common wpa-cli wpad-basic iw subversion-client subversion-libs wget curl whereis \
-        base-files bind-server block-mount blockd busybox usb-modeswitch tini lscpu mount-utils \
-        ziptool zstd iconv jq docker docker-compose dockerd containerd dumpe2fs e2freefrag exfat-mkfs \
-        resize2fs tune2fs ttyd zoneinfo-asia zoneinfo-core bc iwinfo jshn libjson-script libnetwork \
-        openssl-util rename runc which liblucihttp bsdtar pigz gzip bzip2 unzip xz-utils xz tar \
-        liblucihttp-lua ppp ppp-mod-pppoe proto-bonding cgi-io uhttpd uhttpd-mod-ubus comgt comgt-ncm uqmi \
+        acpid attr base-files bash bc bind-server blkid block-mount blockd bsdtar  \
+        btrfs-progs busybox bzip2 cgi-io chattr comgt comgt-ncm containerd coremark  \
+        coreutils coreutils-base64 coreutils-nohup coreutils-truncate curl docker  \
+        docker-compose dockerd dosfstools dumpe2fs e2freefrag e2fsprogs exfat-mkfs  \
+        f2fs-tools f2fsck fdisk gawk getopt gzip hostapd-common iconv iw iwinfo jq jshn  \
+        kmod-brcmfmac kmod-brcmutil kmod-cfg80211 kmod-mac80211 libjson-script  \
+        liblucihttp liblucihttp-lua libnetwork losetup lsattr lsblk lscpu mkf2fs  \
+        mount-utils openssl-util parted perl-http-date perlbase-file perlbase-getopt  \
+        perlbase-time perlbase-unicode perlbase-utf8 pigz ppp ppp-mod-pppoe  \
+        proto-bonding pv rename resize2fs runc subversion-client subversion-libs tar  \
+        tini ttyd tune2fs uclient-fetch uhttpd uhttpd-mod-ubus unzip uqmi usb-modeswitch  \
+        uuidgen wget-ssl whereis which wpa-cli wpad-basic wwan xfs-fsck xfs-mkfs xz  \
+        xz-utils ziptool zoneinfo-asia zoneinfo-core zstd  \
         \
-        luci luci-base luci-lib-base luci-i18n-base-en luci-i18n-base-zh-cn luci-lib-ipkg luci-lib-docker \
-        luci-lib-ip luci-lib-jsonc luci-lib-nixio luci-mod-network luci-mod-status luci-mod-system \
-        luci-mod-admin-full luci-compat luci-proto-3g luci-proto-bonding luci-proto-ipip luci-proto-ncm \
-        luci-proto-ipv6 luci-proto-openconnect luci-proto-ppp luci-proto-qmi luci-proto-relay \
+        luci luci-base luci-compat luci-i18n-base-en luci-i18n-base-zh-cn luci-lib-base  \
+        luci-lib-docker luci-lib-ip luci-lib-ipkg luci-lib-jsonc luci-lib-nixio  \
+        luci-mod-admin-full luci-mod-network luci-mod-status luci-mod-system  \
+        luci-proto-3g luci-proto-bonding luci-proto-ipip luci-proto-ipv6 luci-proto-ncm  \
+        luci-proto-openconnect luci-proto-ppp luci-proto-qmi luci-proto-relay  \
         \
-        luci-theme-material \
+        luci-app-amlogic luci-i18n-amlogic-zh-cn \
         \
-        luci-app-opkg luci-app-dockerman luci-app-firewall luci-app-transmission \
-        luci-app-ttyd luci-app-samba4 luci-app-upnp luci-app-amlogic \
-        \
-        luci-i18n-opkg-en luci-i18n-dockerman-en luci-i18n-firewall-en luci-i18n-transmission-en \
-        luci-i18n-ttyd-en luci-i18n-samba4-en luci-i18n-upnp-en \
-        \
-        luci-i18n-opkg-zh-cn luci-i18n-dockerman-zh-cn luci-i18n-firewall-zh-cn luci-i18n-transmission-zh-cn \
-        luci-i18n-ttyd-zh-cn luci-i18n-samba4-zh-cn luci-i18n-upnp-zh-cn luci-i18n-amlogic-zh-cn \
+        ${config_list} \
         "
 
     # Rebuild firmware
@@ -186,9 +201,10 @@ echo -e "${INFO} Rebuild branch: [ ${rebuild_branch} ]"
 #
 # Perform related operations
 download_imagebuilder
-custom_packages
-custom_files
 adjust_settings
+custom_packages
+custom_config
+custom_files
 rebuild_firmware
 #
 # Show server end information

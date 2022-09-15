@@ -182,7 +182,9 @@ sed -i 's/LUCI_DEPENDS.*/LUCI_DEPENDS:=\@\(arm\|\|aarch64\)/g' package/lean/luci
 OpenWrt 官方网站提供了制作好的 openwrt-imagebuilder-*-armvirt-64.Linux-x86_64.tar.xz 文件（下载地址：[https://downloads.openwrt.org/releases](https://downloads.openwrt.org/releases)），可以使用官方的 Image Builder 在此文件中添加软件包和插件，通常只用几分钟便可制作出一个 openwrt-rootfs.tar.gz 文件。制作方法可以参照官方文档：[使用 Image Builder](https://openwrt.org/zh/docs/guide-user/additional-software/imagebuilder)
 
 本仓库提供了一键制作服务，你只需要把分支参数传入 [imagebuilder 脚本](openwrt-imagebuilder/imagebuilder.sh) 即可完成制作。
-- 本地化制作命令：`./imagebuilder.sh <branch>`，例如：`./imagebuilder.sh 21.02.3`
+
+- 本地化制作命令：可以在 `~/amlogic-s9xxx-openwrt` 根目录下运行 `sudo ./router-config/openwrt-imagebuilder/imagebuilder.sh 21.02.3` 指令即可生成。其中的参数 `21.02.3` 是当前可以[下载](https://downloads.openwrt.org/releases)使用的 `releases` 版本号。生成的文件在 `openwrt/bin/targets/armvirt/64` 目录下。
+
 - 使用 github.com 的 `Actions` 中进行制作：[Build OpenWrt with Image Builder](../.github/workflows/build-openwrt-with-imagebuilder.yml)
 
 ## 5. 编译固件
@@ -229,14 +231,14 @@ schedule:
 ```yaml
 - name: Upload OpenWrt Firmware to Release
   uses: ncipollo/release-action@main
-  if: steps.build.outputs.status == 'success' && env.UPLOAD_RELEASE == 'true' && !cancelled()
+  if: env.PACKAGED_STATUS == 'success' && !cancelled()
   with:
-    tag: openwrt_s9xxx_${{ env.FILE_DATE }}
-    artifacts: ${{ env.FILEPATH }}/*
+    tag: openwrt_amlogic_s9xxx_lede_${{ env.PACKAGED_OUTPUTDATE }}
+    artifacts: ${{ env.PACKAGED_OUTPUTPATH }}/*
     allowUpdates: true
     token: ${{ secrets.GH_TOKEN }}
     body: |
-      This is OpenWrt firmware for Amlogic s9xxx TV Boxes
+      This is OpenWrt firmware for Amlogic s9xxx tv box
       * Firmware information
       Default IP: 192.168.1.1
       Default username: root
@@ -308,7 +310,7 @@ UPLOAD_WETRANSFER: false
 
 ### 8.3 使用脚本命令安装
 
-从浏览器访问 OpenWrt 的默认 IP: 192.168.1.1 → `使用默认账户登录进入 openwrt` → `系统菜单` → `TTYD 终端` → 输入写入EMMC的命令: 
+从浏览器访问 OpenWrt 的默认 IP: 192.168.1.1 → `使用默认账户登录进入 openwrt` → `系统菜单` → `TTYD 终端` → 输入写入EMMC的命令:
 
 ```yaml
 openwrt-install-amlogic
@@ -372,12 +374,11 @@ GitHub官方给出了详细的说明，关于 GitHub Actions 的使用方法，�
 
 #### 10.2.1 更换编译源码库的地址和分支
 
-
 ```yaml
-#在第17行: 是指定openwrt编译源码的地址
+#在第 63 行: 是指定 OpenWrt 编译源码的地址
 REPO_URL: https://github.com/coolsnowwolf/lede
 
-#在第18行: 是指定分支的名称
+#在第 64 行: 是指定分支的名称
 REPO_BRANCH: master
 ```
 你可以修改成其他源码库的地址，如采用官方的源码库，使用其 `openwrt-21.02` 分支:
@@ -388,24 +389,22 @@ REPO_BRANCH: openwrt-21.02
 
 #### 10.2.2 更改盒子的型号和内核版本号
 
-在第96行附近, 查找标题为 `Build OpenWrt firmware` 的编译步骤, 其代码块类似这样:
+在第 139 行附近, 查找标题为 `Build OpenWrt firmware` 的编译步骤, 其代码块类似这样:
 ```yaml
-    - name: Build OpenWrt firmware
-      if: steps.compile.outputs.status == 'success' && env.UPLOAD_FIRMWARE == 'true' && !cancelled()
-      id: build
-      run: |
-        [ -d openwrt-armvirt ] || mkdir -p openwrt-armvirt
-        cp -f openwrt/bin/targets/*/*/*rootfs.tar.gz openwrt-armvirt/ && sync
-        sudo rm -rf openwrt && sync
-        sudo rm -rf /workdir && sync
-        sudo chmod +x make
-        sudo ./make -d -b s905x3_s905x2_s905x_s905d_s922x_s912 -k 5.10.125_5.15.50
-        cd out/ && sudo gzip *.img
-        cp -f ../openwrt-armvirt/*rootfs.tar.gz . && sync
-        echo "FILEPATH=$PWD" >> $GITHUB_ENV
-        echo "::set-output name=status::success"
+- name: Build OpenWrt firmware
+  if: steps.compile.outputs.status == 'success' && !cancelled()
+  uses: ophub/amlogic-s9xxx-openwrt@main
+  with:
+    openwrt_path: openwrt/bin/targets/*/*/*rootfs.tar.gz
+    openwrt_soc: ${{ github.event.inputs.openwrt_soc }}
+    openwrt_kernel: ${{ github.event.inputs.openwrt_kernel }}
+    auto_kernel: ${{ github.event.inputs.auto_kernel }}
+    openwrt_size: ${{ github.event.inputs.openwrt_size }}
 ```
-修改 `-d` 后面的参数为你的盒子的型号。修改 `-k` 的参数为你选择的内核版本号，如: `sudo ./make -d -b s905x -k 5.10.125` 可以指定的参数及更多使用方法详见: [打包命令的相关参数说明](https://github.com/ophub/amlogic-s9xxx-openwrt/blob/main/README.cn.md#打包命令的相关参数说明)
+参考打包命令的相关[参数说明](https://github.com/ophub/amlogic-s9xxx-openwrt/blob/main/README.cn.md#github-actions-输入参数说明)。以上设置选项可以通过写入固定值来设置，也可以通过 `Actions` 面板进行选择：
+<div style="width:100%;margin-top:40px;margin:5px;">
+<img src=https://user-images.githubusercontent.com/68696949/181870674-1816aa21-ece4-4149-83ce-6ec7f95ece68.png width="700" />
+</div>
 
 ### 10.3 自定义 banner 信息
 
@@ -432,11 +431,11 @@ REPO_BRANCH: openwrt-21.02
 ```yaml
 - name: Load custom configuration
   run: |
-    [ -e files ] && mv files openwrt/files
-    [ -e $CONFIG_FILE ] && mv $CONFIG_FILE openwrt/.config
-    chmod +x $DIY_P2_SH
+    [[ -d "files" ]] && mv -f files openwrt/files
+    [[ -e "${CONFIG_FILE}" ]] && cp -f ${CONFIG_FILE} openwrt/.config
+    chmod +x ${DIY_P2_SH}
     cd openwrt
-    $GITHUB_WORKSPACE/$DIY_P2_SH
+    ${GITHUB_WORKSPACE}/${DIY_P2_SH}
 ```
 
 请不要复制那些涉及隐私的配置信息文件，如果你的仓库是公开的，那么你放在 files 目录里的文件也是公开的，千万不要把秘密公开。一些密码等信息，可以使用你刚才在 GitHub Actions 快速上手指南里学习到的私钥设置等方法来加密使用。你一定要了解你在做什么。
@@ -561,30 +560,34 @@ Subtarget      -> QEMU ARMv8 Virtual Machine (cortex-a53)
 Target Profile -> Default
 Target Images  -> tar.gz
 
-Languages -> Perl
-             -> perl-http-date
-             -> perlbase-getopt
-             -> perlbase-time
-             -> perlbase-unicode
-             -> perlbase-utf8
-
-Utilities -> Disc -> blkid、fdisk、lsblk、parted
-          -> Filesystem -> attr、btrfs-progs(Build with zstd support)、chattr、dosfstools、
-                           e2fsprogs、f2fs-tools、f2fsck、lsattr、mkf2fs、xfs-fsck、xfs-mkfs
-          -> Compression -> bsdtar、pigz
-          -> Shells -> bash
-          -> gawk、getopt、losetup、pv、tar、uuidgen、coremark
-             coreutils
-             -> coreutils-base64、coreutils-nohup
 
 Kernel modules -> Wireless Drivers -> kmod-brcmfmac(SDIO)
                                    -> kmod-brcmutil
                                    -> kmod-cfg80211
                                    -> kmod-mac80211
 
+
+Languages -> Perl
+             -> perl-http-date
+             -> perlbase-file
+             -> perlbase-getopt
+             -> perlbase-time
+             -> perlbase-unicode
+             -> perlbase-utf8
+
+
 Network -> WirelessAPD -> hostapd-common
                        -> wpa-cli
                        -> wpad-basic
         -> iw
+
+
+Utilities -> Compression -> bsdtar、pigz
+          -> Disc -> blkid、fdisk、lsblk、parted
+          -> Filesystem -> attr、btrfs-progs(Build with zstd support)、chattr、dosfstools、
+                           e2fsprogs、f2fs-tools、f2fsck、lsattr、mkf2fs、xfs-fsck、xfs-mkfs
+          -> Shells -> bash
+          -> acpid、coremark、coreutils(-> coreutils-base64、coreutils-nohup)、gawk、getopt、
+             losetup、pv、tar、uuidgen
 ```
 
