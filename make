@@ -27,11 +27,10 @@
 # download_kernel    : Download the latest kernel
 #
 # confirm_version    : Confirm version type
-# extract_openwrt    : Extract OpenWrt files
-# extract_armbian    : Extract Armbian files
-# refactor_files     : Refactor related files
 # make_image         : Making OpenWrt file
-# copy_files         : Copy the OpenWrt files
+# extract_openwrt    : Extract OpenWrt files
+# replace_kernel     : Replace the kernel
+# refactor_files     : Refactor related files
 # clean_tmp          : Clear temporary files
 #
 # loop_make          : Loop to make OpenWrt files
@@ -66,7 +65,7 @@ build_kernel=("5.10.125" "5.15.50")
 build_openwrt=(
     "a311d"
     "s922x" "s922x-n2" "s922x-reva"
-    "s905x3"
+    "s905x3" "s905x3-b"
     "s905x2" "s905x2-km3"
     "s912" "s912-m8s"
     "s905d" "s905d-ki"
@@ -180,12 +179,27 @@ init_var() {
 find_openwrt() {
     cd ${make_path}
 
+    # Find whether the openwrt file exists
     openwrt_file_name="$(ls ${openwrt_path}/${openwrt_rootfs_file} 2>/dev/null | head -n 1 | awk -F "/" '{print $NF}')"
     if [[ -n "${openwrt_file_name}" ]]; then
-        echo -e "${INFO} OpenWrt make file: [ ${openwrt_file_name} ]"
+        echo -e "${INFO} OpenWrt file: [ ${openwrt_file_name} ]"
     else
         error_msg "There is no [ ${openwrt_rootfs_file} ] file in the [ ${openwrt_path} ] directory."
     fi
+
+    # Extract the openwrt release information file
+    source_codename=""
+    source_release_file="etc/openwrt_release"
+    temp_dir="$(mktemp -d)"
+    (cd ${temp_dir} && tar -xzf "${openwrt_path}/${openwrt_file_name}" "./${source_release_file}" 2>/dev/null)
+    # Find custom DISTRIB_SOURCECODE, such as [ official/lede ]
+    [[ -f "${temp_dir}/${source_release_file}" ]] && {
+        source_codename="$(cat ${temp_dir}/${source_release_file} 2>/dev/null | grep -oE "^DISTRIB_SOURCECODE=.*" | head -n 1 | cut -d"'" -f2)"
+        [[ -n "${source_codename}" && "${source_codename:0:1}" != "_" ]] && source_codename="_${source_codename}"
+        echo -e "${INFO} The source_codename: [ ${source_codename} ]"
+    }
+    # Remove temporary directory
+    rm -rf ${temp_dir} 2>/dev/null
 }
 
 download_depends() {
@@ -196,39 +210,41 @@ download_depends() {
     if [[ "${depends_repo}" == http* && -n "$(echo ${depends_repo} | grep "tree/main")" ]]; then
         depends_repo="${depends_repo//tree\/main/trunk}"
     fi
-    # Sync armbian related files
+    # Download armbian related files
     if [[ -d "${armbian_path}" ]]; then
         svn up ${armbian_path} --force
     else
         svn co ${depends_repo}/amlogic-armbian ${armbian_path} --force
     fi
-    # Sync /boot related files
+    # Download /boot related files
     if [[ -d "${bootfs_path}" ]]; then
         svn up ${bootfs_path} --force
     else
         svn co ${depends_repo}/common-files/bootfs ${bootfs_path} --force
     fi
-    # Sync u-boot related files
+    # Download u-boot related files
     if [[ -d "${uboot_path}" ]]; then
         svn up ${uboot_path} --force
     else
         svn co ${depends_repo}/amlogic-u-boot ${uboot_path} --force
     fi
-    # Sync openvfd related files
+    # Download openvfd related files
     if [[ -d "${openvfd_path}" ]]; then
         svn up ${openvfd_path} --force
     else
         svn co ${depends_repo}/common-files/rootfs/usr/share/openvfd ${openvfd_path} --force
     fi
+    # Download balethirq related files
+    svn export ${depends_repo}/common-files/rootfs/usr/sbin/balethirq.pl ${configfiles_path}/rootfs/usr/sbin --force
+    svn export ${depends_repo}/common-files/rootfs/etc/balance_irq ${configfiles_path}/rootfs/etc --force
 
     # Convert script library address to svn format
     if [[ "${script_repo}" == http* && -n "$(echo ${script_repo} | grep "tree/main")" ]]; then
         script_repo="${script_repo//tree\/main/trunk}"
     fi
-    # Sync install/update and other related files
+    # Download install/update and other related files
     svn export ${script_repo} ${configfiles_path}/rootfs/usr/sbin --force
-
-    sync
+    chmod +x ${configfiles_path}/rootfs/usr/sbin/*
 }
 
 download_kernel() {
@@ -270,7 +286,7 @@ download_kernel() {
     unset build_kernel
     build_kernel="${tmp_arr_kernels[*]}"
 
-    # Synchronization related kernel
+    # Download kernel
     i=1
     for KERNEL_VAR in ${build_kernel[*]}; do
         if [[ ! -d "${kernel_path}/${KERNEL_VAR}" ]]; then
@@ -286,7 +302,7 @@ download_kernel() {
 }
 
 confirm_version() {
-    process_msg " (1/7) Confirm version type."
+    process_msg " (1/6) Confirm version type."
     cd ${make_path}
 
     # Confirm soc branch
@@ -320,6 +336,12 @@ confirm_version() {
         UBOOT_OVERLOAD="u-boot-x96maxplus.bin"
         MAINLINE_UBOOT="x96maxplus-u-boot.bin.sd.bin"
         ANDROID_UBOOT="hk1box-bootloader.img"
+        ;;
+    s905x3-b | ta3pro)
+        FDTFILE="meson-sm1-skyworth-lb2004-a4091.dtb"
+        UBOOT_OVERLOAD="u-boot-skyworth-lb2004.bin"
+        MAINLINE_UBOOT="skyworth-lb2004-u-boot.bin.sd.bin"
+        ANDROID_UBOOT=""
         ;;
     s905x2 | x96max4g | x96max2g)
         FDTFILE="meson-g12a-x96-max.dtb"
@@ -395,44 +417,88 @@ confirm_version() {
     [[ -z "${ROOTFS_UUID}" ]] && error_msg "The uuidgen is invalid, cannot continue."
 }
 
-extract_openwrt() {
-    process_msg " (2/7) Extract openwrt files."
+make_image() {
+    process_msg " (2/6) Make openwrt image."
     cd ${make_path}
 
-    local firmware="${openwrt_path}/${openwrt_file_name}"
+    # Set openwrt filename
+    build_image_file="${out_path}/openwrt${source_codename}_${soc}_k${kernel}_$(date +"%Y.%m.%d").img"
+    rm -f ${build_image_file} 2>/dev/null
 
-    root_comm="${tmp_path}/root_comm"
-    mkdir -p ${root_comm}
+    [[ -d "${out_path}" ]] || mkdir -p ${out_path}
+    IMG_SIZE="$((SKIP_MB + BOOT_MB + ROOT_MB))"
 
-    tar -xzf ${firmware} -C ${root_comm}
-    rm -rf ${root_comm}/lib/modules/* 2>/dev/null
-    sync
+    #fallocate -l ${IMG_SIZE}M ${build_image_file}
+    dd if=/dev/zero of=${build_image_file} bs=1M count=${IMG_SIZE} conv=fsync 2>/dev/null
+
+    # Create openwrt image file partition
+    parted -s ${build_image_file} mklabel msdos 2>/dev/null
+    parted -s ${build_image_file} mkpart primary fat32 $((SKIP_MB))MiB $((SKIP_MB + BOOT_MB - 1))MiB 2>/dev/null
+    parted -s ${build_image_file} mkpart primary btrfs $((SKIP_MB + BOOT_MB))MiB 100% 2>/dev/null
+
+    # Mount the openwrt image file
+    loop_new="$(losetup -P -f --show "${build_image_file}")"
+    [[ -n "${loop_new}" ]] || error_msg "losetup ${build_image_file} failed."
+
+    # Format openwrt image file
+    mkfs.vfat -n "BOOT" ${loop_new}p1 >/dev/null 2>&1
+    mkfs.btrfs -f -U ${ROOTFS_UUID} -L "ROOTFS" -m single ${loop_new}p2 >/dev/null 2>&1
+
+    # Write the specified bootloader
+    if [[ -n "${MAINLINE_UBOOT}" && -f "${uboot_path}/bootloader/${MAINLINE_UBOOT}" ]]; then
+        dd if="${uboot_path}/bootloader/${MAINLINE_UBOOT}" of="${loop_new}" bs=1 count=444 conv=fsync 2>/dev/null
+        dd if="${uboot_path}/bootloader/${MAINLINE_UBOOT}" of="${loop_new}" bs=512 skip=1 seek=1 conv=fsync 2>/dev/null
+        #echo -e "${INFO} ${soc}_v${kernel} write Mainline bootloader: ${MAINLINE_UBOOT}"
+    elif [[ -n "${ANDROID_UBOOT}" && -f "${uboot_path}/bootloader/${ANDROID_UBOOT}" ]]; then
+        dd if="${uboot_path}/bootloader/${ANDROID_UBOOT}" of="${loop_new}" bs=1 count=444 conv=fsync 2>/dev/null
+        dd if="${uboot_path}/bootloader/${ANDROID_UBOOT}" of="${loop_new}" bs=512 skip=1 seek=1 conv=fsync 2>/dev/null
+        #echo -e "${INFO} ${soc}_v${kernel} write Android bootloader: ${ANDROID_UBOOT}"
+    fi
 }
 
-extract_armbian() {
-    process_msg " (3/7) Extract armbian files."
+extract_openwrt() {
+    process_msg " (3/6) Extract openwrt files."
     cd ${make_path}
 
-    root="${tmp_path}/${kernel}/${soc}/root"
-    boot="${tmp_path}/${kernel}/${soc}/boot"
-    mkdir -p ${root} ${boot}
+    # Create openwrt mirror partition
+    tag_bootfs="${tmp_path}/${kernel}/${soc}/bootfs"
+    tag_rootfs="${tmp_path}/${kernel}/${soc}/rootfs"
+    mkdir -p ${tag_bootfs} ${tag_rootfs}
 
-    # Copy OpenWrt files
-    cp -rf ${root_comm}/* ${root}
+    # Mount the openwrt image
+    if ! mount ${loop_new}p1 ${tag_bootfs}; then
+        error_msg "mount ${loop_new}p1 failed!"
+    fi
+    if ! mount ${loop_new}p2 ${tag_rootfs}; then
+        error_msg "mount ${loop_new}p2 failed!"
+    fi
+
+    # Create snapshot directory
+    btrfs subvolume create ${tag_rootfs}/etc >/dev/null 2>&1
+
+    # Unzip the openwrt package
+    tar -xzf ${openwrt_path}/${openwrt_file_name} -C ${tag_rootfs}
+    rm -rf ${tag_rootfs}/lib/modules/* 2>/dev/null
+    rm -f ${tag_rootfs}/rom/sbin/firstboot 2>/dev/null
 
     # Unzip the relevant files
-    tar -xJf "${armbian_path}/boot-common.tar.xz" -C ${boot}
-    tar -xJf "${armbian_path}/firmware.tar.xz" -C ${root}
+    tar -xJf "${armbian_path}/boot-common.tar.xz" --no-same-owner -C ${tag_bootfs}
+    tar -xJf "${armbian_path}/firmware.tar.xz" --no-same-owner -C ${tag_rootfs}
 
     # Copy the same files
-    [[ "$(ls ${configfiles_path}/bootfs 2>/dev/null | wc -w)" -ne "0" ]] && cp -rf ${configfiles_path}/bootfs/* ${boot}
-    [[ "$(ls ${configfiles_path}/rootfs 2>/dev/null | wc -w)" -ne "0" ]] && cp -rf ${configfiles_path}/rootfs/* ${root}
+    [[ "$(ls ${configfiles_path}/bootfs 2>/dev/null | wc -w)" -ne "0" ]] && cp -rf ${configfiles_path}/bootfs/* ${tag_bootfs}
+    [[ "$(ls ${configfiles_path}/rootfs 2>/dev/null | wc -w)" -ne "0" ]] && cp -rf ${configfiles_path}/rootfs/* ${tag_rootfs}
 
     # Copy the bootloader files
-    [[ -d "${root}/lib/u-boot" ]] || mkdir -p "${root}/lib/u-boot"
-    cp -f ${uboot_path}/bootloader/* ${root}/lib/u-boot
+    [[ -d "${tag_rootfs}/lib/u-boot" ]] || mkdir -p "${tag_rootfs}/lib/u-boot"
+    cp -f ${uboot_path}/bootloader/* ${tag_rootfs}/lib/u-boot
     # Copy the overload files
-    cp -f ${uboot_path}/overload/* ${boot}
+    cp -f ${uboot_path}/overload/* ${tag_bootfs}
+}
+
+replace_kernel() {
+    process_msg " (4/6) Replace the kernel."
+    cd ${make_path}
 
     # Replace the kernel
     build_boot="$(ls ${kernel_path}/${kernel}/boot-${kernel}-*.tar.gz 2>/dev/null | head -n 1)"
@@ -441,24 +507,23 @@ extract_armbian() {
     [[ -n "${build_boot}" && -n "${build_dtb}" && -n "${build_modules}" ]] || error_msg "The 3 kernel missing."
 
     # 01. For /boot five files
-    tar -xzf ${build_boot} -C ${boot} && sync
-    [[ "$(ls ${boot}/*-${kernel}-* -l 2>/dev/null | grep "^-" | wc -l)" -ge "4" ]] || error_msg "The /boot files is missing."
-    (cd ${boot} && cp -f uInitrd-* uInitrd && cp -f vmlinuz-* zImage && sync)
-    get_textoffset "${boot}/zImage"
+    tar -xzf ${build_boot} -C ${tag_bootfs}
+    [[ "$(ls ${tag_bootfs}/*-${kernel}-* -l 2>/dev/null | grep "^-" | wc -l)" -ge "4" ]] || error_msg "The /boot files is missing."
+    (cd ${tag_bootfs} && cp -f uInitrd-* uInitrd && cp -f vmlinuz-* zImage)
+    get_textoffset "${tag_bootfs}/zImage"
 
     # 02. For /boot/dtb/amlogic/*
-    tar -xzf ${build_dtb} -C ${boot}/dtb/amlogic && sync
+    tar -xzf ${build_dtb} -C ${tag_bootfs}/dtb/amlogic
 
     # 03. For /lib/modules/*
-    tar -xzf ${build_modules} -C ${root}/lib/modules && sync
-    (cd ${root}/lib/modules/${kernel}-*/ && rm -f build source *.ko 2>/dev/null && find ./ -type f -name '*.ko' -exec ln -s {} ./ \; && sync)
-    [[ "$(ls ${root}/lib/modules/${kernel}-* -l 2>/dev/null | grep "^d" | wc -l)" -eq "1" ]] || error_msg "Missing kernel."
-    sync
+    tar -xzf ${build_modules} -C ${tag_rootfs}/lib/modules
+    (cd ${tag_rootfs}/lib/modules/${kernel}-*/ && rm -f build source *.ko 2>/dev/null && find ./ -type f -name '*.ko' -exec ln -s {} ./ \;)
+    [[ "$(ls ${tag_rootfs}/lib/modules/${kernel}-* -l 2>/dev/null | grep "^d" | wc -l)" -eq "1" ]] || error_msg "Missing kernel."
 }
 
 refactor_files() {
-    process_msg " (4/7) Refactor related files."
-    cd ${root}
+    process_msg " (5/6) Refactor related files."
+    cd ${tag_rootfs}
 
     # Add other operations below
     echo 'pwm_meson' >etc/modules.d/pwm-meson
@@ -488,8 +553,8 @@ EOF
     echo meson_gxbb_wdt >etc/modules.d/watchdog 2>/dev/null
 
     # Edit fstab
-    sed -i "s/LABEL=ROOTFS/UUID=${ROOTFS_UUID}/" etc/fstab 2>/dev/null
-    sed -i "s/option label 'ROOTFS'/option uuid '${ROOTFS_UUID}'/" etc/config/fstab 2>/dev/null
+    sed -i "s|LABEL=ROOTFS|UUID=${ROOTFS_UUID}|" etc/fstab 2>/dev/null
+    sed -i "s|option label 'ROOTFS'|option uuid '${ROOTFS_UUID}'|" etc/config/fstab 2>/dev/null
 
     # Turn off speed limit by default
     [[ -f "etc/config/nft-qos" ]] && sed -i "s|option limit_enable.*|option limit_enable '0'|g" etc/config/nft-qos
@@ -558,12 +623,8 @@ EOF
     fi
 
     # Add balethirq
-    balethirq_file="${configfiles_path}/patches/balethirq"
-    if [[ -d "${balethirq_file}" ]]; then
-        cp -f ${balethirq_file}/balethirq.pl usr/sbin/balethirq.pl && chmod +x usr/sbin/balethirq.pl >/dev/null 2>&1
-        sed -i "/exit/i\/usr/sbin/balethirq.pl" etc/rc.local >/dev/null 2>&1
-        cp -f ${balethirq_file}/balance_irq etc/balance_irq >/dev/null 2>&1
-    fi
+    balethirq_file="${configfiles_path}/rootfs/usr/sbin/balethirq.pl"
+    [[ -x "${balethirq_file}" ]] && sed -i "/exit/i\/usr/sbin/balethirq.pl" etc/rc.local >/dev/null 2>&1
 
     # Add firmware information
     echo "PLATFORM='amlogic'" >>${op_release} 2>/dev/null
@@ -619,9 +680,8 @@ EOF
         # x96max plus v5.1 (ip1001m phy) adopts am7256 (brcm4354)
         sed -e "s/macaddr=.*/macaddr=${random_macaddr}:07/" "brcmfmac4354-sdio.txt" >"brcmfmac4354-sdio.amlogic,sm1.txt"
     )
-    sync
 
-    cd ${boot}
+    cd ${tag_bootfs}
 
     # For btrfs file system
     uenv_mount_string="UUID=${ROOTFS_UUID} rootflags=compress=zstd:6 rootfstype=btrfs"
@@ -644,88 +704,41 @@ EOF
     elif [[ "${K510}" -eq "1" ]] && [[ -z "${UBOOT_OVERLOAD}" || ! -f "${UBOOT_OVERLOAD}" ]]; then
         error_msg "${soc} SoC does not support using ${kernel} kernel, missing u-boot."
     fi
-    sync
-}
-
-make_image() {
-    process_msg " (5/7) Make openwrt image."
-    cd ${make_path}
-
-    build_image_file="${out_path}/openwrt_${soc}_k${kernel}_$(date +"%Y.%m.%d").img"
-    rm -f ${build_image_file}
-    sync
-
-    [[ -d "${out_path}" ]] || mkdir -p ${out_path}
-    IMG_SIZE="$((SKIP_MB + BOOT_MB + ROOT_MB))"
-
-    #fallocate -l ${IMG_SIZE}M ${build_image_file}
-    dd if=/dev/zero of=${build_image_file} bs=1M count=${IMG_SIZE} conv=fsync 2>/dev/null && sync
-
-    parted -s ${build_image_file} mklabel msdos 2>/dev/null
-    parted -s ${build_image_file} mkpart primary fat32 $((SKIP_MB))MiB $((SKIP_MB + BOOT_MB - 1))MiB 2>/dev/null
-    parted -s ${build_image_file} mkpart primary btrfs $((SKIP_MB + BOOT_MB))MiB 100% 2>/dev/null
-    sync
-
-    loop_new="$(losetup -P -f --show "${build_image_file}")"
-    [[ -n "${loop_new}" ]] || error_msg "losetup ${build_image_file} failed."
-
-    mkfs.vfat -n "BOOT" ${loop_new}p1 >/dev/null 2>&1
-    mkfs.btrfs -f -U ${ROOTFS_UUID} -L "ROOTFS" -m single ${loop_new}p2 >/dev/null 2>&1
-    sync
-
-    # Write the specified bootloader
-    if [[ -n "${MAINLINE_UBOOT}" && -f "${root}/lib/u-boot/${MAINLINE_UBOOT}" ]]; then
-        dd if="${root}/lib/u-boot/${MAINLINE_UBOOT}" of="${loop_new}" bs=1 count=444 conv=fsync 2>/dev/null
-        dd if="${root}/lib/u-boot/${MAINLINE_UBOOT}" of="${loop_new}" bs=512 skip=1 seek=1 conv=fsync 2>/dev/null
-        #echo -e "${INFO} ${soc}_v${kernel} write Mainline bootloader: ${MAINLINE_UBOOT}"
-    elif [[ -n "${ANDROID_UBOOT}" && -f "${root}/lib/u-boot/${ANDROID_UBOOT}" ]]; then
-        dd if="${root}/lib/u-boot/${ANDROID_UBOOT}" of="${loop_new}" bs=1 count=444 conv=fsync 2>/dev/null
-        dd if="${root}/lib/u-boot/${ANDROID_UBOOT}" of="${loop_new}" bs=512 skip=1 seek=1 conv=fsync 2>/dev/null
-        #echo -e "${INFO} ${soc}_v${kernel} write Android bootloader: ${ANDROID_UBOOT}"
-    fi
-    sync
-}
-
-copy_files() {
-    process_msg " (6/7) Copy files to image."
-    cd ${make_path}
-
-    local bootfs="${tmp_path}/${kernel}/${soc}/bootfs"
-    local rootfs="${tmp_path}/${kernel}/${soc}/rootfs"
-    mkdir -p ${bootfs} ${rootfs} && sync
-
-    if ! mount ${loop_new}p1 ${bootfs}; then
-        error_msg "mount ${loop_new}p1 failed!"
-    fi
-    if ! mount ${loop_new}p2 ${rootfs}; then
-        error_msg "mount ${loop_new}p2 failed!"
-    fi
-
-    cp -rf ${boot}/* ${bootfs}
-    cp -rf ${root}/* ${rootfs}
-    sync
 
     cd ${make_path}
-    umount -f ${bootfs} 2>/dev/null
-    umount -f ${rootfs} 2>/dev/null
-    losetup -d ${loop_new} 2>/dev/null
 
-    cd ${out_path} && pigz -9 *.img
-    sync
+    # Create snapshot
+    mkdir -p ${tag_rootfs}/.snapshots
+    btrfs subvolume snapshot -r ${tag_rootfs}/etc ${tag_rootfs}/.snapshots/etc-000 >/dev/null 2>&1
+
+    sync && sleep 3
 }
 
 clean_tmp() {
-    process_msg " (7/7) Cleanup tmp files."
+    process_msg " (6/6) Cleanup tmp files."
     cd ${make_path}
 
+    # Unmount the openwrt image file
+    umount -f ${tag_bootfs} 2>/dev/null
+    umount -f ${tag_rootfs} 2>/dev/null
+    losetup -d ${loop_new} 2>/dev/null
+
+    # Loop to cancel other mounts
     for x in $(lsblk | grep $(pwd) | grep -oE 'loop[0-9]+' | sort | uniq); do
         umount -f /dev/${x}p* 2>/dev/null
         losetup -d /dev/${x} 2>/dev/null
     done
     losetup -D
 
+    cd ${out_path}
+
+    # Compress the openwrt image file
+    pigz -9f *.img && sync
+
+    cd ${make_path}
+
+    # Clear temporary files directory
     rm -rf ${tmp_path} 2>/dev/null
-    sync
 }
 
 loop_make() {
@@ -739,9 +752,9 @@ loop_make() {
             {
                 echo -n "(${j}.${i}) Start making OpenWrt [ ${b} - ${k} ]. "
 
-                now_remaining_space="$(df -hT ${make_path} | grep '/dev/' | awk '{print $5}' | sed 's/.$//' | awk -F "." '{print $1}')"
-                if [[ "${now_remaining_space}" -le "2" ]]; then
-                    echo "Remaining space is less than 2G, exit this making. \n"
+                now_remaining_space="$(df -Tk ${make_path} | grep '/dev/' | awk '{print $5}' | echo $(($(xargs) / 1024 / 1024)))"
+                if [[ "${now_remaining_space}" -le "3" ]]; then
+                    echo "Remaining space is less than 3G, exit this making. \n"
                     break
                 else
                     echo "Remaining space is ${now_remaining_space}G."
@@ -753,11 +766,10 @@ loop_make() {
 
                 # Execute the following functions in sequence
                 confirm_version
-                extract_openwrt
-                extract_armbian
-                refactor_files
                 make_image
-                copy_files
+                extract_openwrt
+                replace_kernel
+                refactor_files
                 clean_tmp
 
                 echo -e "(${j}.${i}) OpenWrt made successfully. \n"
@@ -771,7 +783,7 @@ loop_make() {
     cd ${out_path}
 
     # Backup the openwrt file
-    cp -f ${openwrt_path}/${openwrt_file_name} . 2>/dev/null && sync
+    cp -f ${openwrt_path}/${openwrt_file_name} . 2>/dev/null
 
     # Generate sha256sum check file
     sha256sum * >sha256sums && sync
